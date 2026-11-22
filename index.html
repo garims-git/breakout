@@ -34,6 +34,23 @@ h1{font:400 clamp(32px,6vw,48px)/1.05 "DotGothic16",monospace;margin:0 0 6px;tex
 button{font:700 16px "M PLUS 1p",sans-serif;min-height:44px;padding:0 20px;border-radius:999px;border:0;background:var(--acc);color:#1a1530;cursor:pointer}
 button.sub{background:#ffffff1f;color:#eef0ff}
 button:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.entry{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:0 0 14px}
+.entry[hidden]{display:none}
+.entry input{font:16px "M PLUS 1p",sans-serif;min-height:44px;padding:0 14px;border-radius:999px;border:2px solid #ffffff40;background:#0008;color:#fff;width:min(220px,100%)}
+.entry input:focus-visible{outline:3px solid var(--acc)}
+.msg{min-height:1.4em;font-size:14px;color:#cfd3f5;margin:0 0 10px}
+.rank{margin-top:22px;background:light-dark(#fff,#141a40);border-radius:18px;padding:16px 18px}
+.rank h2{font:400 24px/1.2 "DotGothic16",monospace;margin:0 0 10px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.rank h2 button{min-height:36px;font-size:14px;padding:0 14px;background:light-dark(#e7e9fa,#22296a);color:var(--ink)}
+.rank ol{list-style:none;margin:0;padding:0}
+.rank li{display:grid;grid-template-columns:2.4em minmax(0,1fr) auto auto;gap:10px;padding:7px 4px;border-top:1px solid light-dark(#e3e5f3,#252c5e);align-items:baseline}
+.rank li:first-child{border-top:0}
+.rank .no{font-family:"DotGothic16",monospace;color:var(--mut)}
+.rank li:nth-child(-n+3) .no{color:#e0a800}
+.rank .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rank .sc{font-variant-numeric:tabular-nums;font-weight:700;text-align:right}
+.rank .st{color:var(--mut);font-size:14px;white-space:nowrap}
+.rank .note{color:var(--mut);margin:0}
 .how{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr));gap:12px;margin-top:22px}
 .how div{background:light-dark(#fff,#141a40);border-radius:14px;padding:12px 14px}
 .how b{display:block}
@@ -50,10 +67,17 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
     <div class="screen" id="screen">
       <canvas id="c" width="800" height="600"></canvas>
       <div class="overlay" id="ov">
-        <div><h2 id="ovT">スタート</h2><p id="ovP">マウス・タッチ・← → キーでパドルを動かします</p><button id="ovB">ゲームを始める</button></div>
+        <div><h2 id="ovT">スタート</h2><p id="ovP">マウス・タッチ・← → キーでパドルを動かします</p>
+          <form class="entry" id="entry" hidden><input id="name" maxlength="12" placeholder="名前（12文字まで）" autocomplete="nickname" aria-label="ランキングに載せる名前"><button id="send" type="submit">ランキングに登録</button></form>
+          <p class="msg" id="msg"></p>
+          <button id="ovB">ゲームを始める</button></div>
       </div>
     </div>
     <div class="btns"><button class="sub" id="pause">一時停止</button><button class="sub" id="reset">最初から</button></div>
+  </section>
+  <section class="rank" aria-label="ランキング">
+    <h2>ランキング TOP10 <button id="reload" type="button">更新</button></h2>
+    <ol id="rankList"><li><span class="note">読み込み中…</span></li></ol>
   </section>
   <div class="how">
     <div><b>動かす</b><span>マウス／指でなぞる、または ← → キー</span></div>
@@ -62,6 +86,10 @@ button:focus-visible{outline:3px solid #fff;outline-offset:2px}
   </div>
 </main>
 <script>
+// ===== ランキング設定：Supabase の値をここに貼り付けてください =====
+const SUPABASE_URL='https://puuskwgbbpuszcdtrzrw.supabase.co';      // 例: https://xxxxxxxx.supabase.co
+const SUPABASE_KEY='sb_publishable_sounz_nMup9hM2Kp42nLIQ_-p5omTWU';      // publishable キー（公開して問題ない方のキー）
+// ==================================================================
 {
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 const W=800,H=600;
@@ -101,7 +129,38 @@ function hud(){
   if(score>best){best=score;try{localStorage.setItem('breakout-best',best)}catch(e){}}
   $('best').textContent=best;
 }
-function overlay(t,p,b){$('ovT').textContent=t;$('ovP').textContent=p;$('ovB').textContent=b;$('ov').hidden=false}
+function overlay(t,p,b,entry){
+  $('ovT').textContent=t;$('ovP').textContent=p;$('ovB').textContent=b;$('ov').hidden=false;
+  $('entry').hidden=!entry;$('send').disabled=false;$('msg').textContent='';
+  if(entry){try{$('name').value=localStorage.getItem('breakout-name')||''}catch(e){}}
+}
+
+// ===== ランキング =====
+const RANK_ON=!!(SUPABASE_URL&&SUPABASE_KEY);
+const api=(path,opt={})=>fetch(SUPABASE_URL.replace(/\/$/,'')+'/rest/v1/'+path,{...opt,headers:{apikey:SUPABASE_KEY,...(SUPABASE_KEY.startsWith('eyJ')?{Authorization:'Bearer '+SUPABASE_KEY}:{}),'Content-Type':'application/json',...(opt.headers||{})}});
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function loadRank(){
+  const el=$('rankList');
+  if(!RANK_ON){el.innerHTML='<li><span class="note">ランキングは未設定です（Supabase の値を設定すると表示されます）</span></li>';return}
+  try{
+    const r=await api('scores?select=name,score,stage&order=score.desc,created_at.asc&limit=10');
+    if(!r.ok)throw 0;
+    const rows=await r.json();
+    el.innerHTML=rows.length?rows.map((x,i)=>`<li><span class="no">${i+1}位</span><span class="nm">${esc(x.name)}</span><span class="sc">${x.score}</span><span class="st">ステージ${x.stage}</span></li>`).join(''):'<li><span class="note">まだ記録がありません。1位を狙おう！</span></li>';
+  }catch(e){el.innerHTML='<li><span class="note">ランキングを読み込めませんでした</span></li>'}
+}
+async function sendScore(ev){
+  ev.preventDefault();
+  const name=$('name').value.trim().slice(0,12);
+  if(!name){$('msg').textContent='名前を入力してください';return}
+  try{localStorage.setItem('breakout-name',name)}catch(e){}
+  $('send').disabled=true;$('msg').textContent='送信中…';
+  try{
+    const r=await api('scores',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({name,score,stage})});
+    if(!r.ok)throw 0;
+    $('msg').textContent='登録しました！';$('entry').hidden=true;loadRank();
+  }catch(e){$('msg').textContent='登録できませんでした。時間をおいて試してください';$('send').disabled=false}
+}
 function start(){$('ov').hidden=true;if(state==='over'||state==='title')newGame();state='play';$('pause').textContent='一時停止'}
 function togglePause(){
   if(state==='play'){state='pause';overlay('一時停止','続きから遊べます','再開する');$('pause').textContent='再開'}
@@ -144,7 +203,7 @@ function update(dt){
     }
     if(ball.y>H+ball.r){
       lives--;hud();
-      if(lives<=0){state='over';overlay('ゲームオーバー','スコア '+score+' 点','もう一度遊ぶ');return}
+      if(lives<=0){state='over';overlay('ゲームオーバー','スコア '+score+' 点','もう一度遊ぶ',RANK_ON&&score>0);return}
       resetBall();return;
     }
   }
@@ -190,6 +249,7 @@ function movePointer(e){
 cv.addEventListener('pointermove',movePointer);
 cv.addEventListener('pointerdown',e=>{movePointer(e);if(state==='play')launch()});
 addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT')return;
   if(e.key==='ArrowLeft'||e.key==='ArrowRight'){keys[e.key]=true;e.preventDefault()}
   if(e.code==='Space'){e.preventDefault();if(state==='play'&&ball.stuck)launch();else if(state==='play'||state==='pause')togglePause();else $('ovB').click()}
 });
@@ -200,6 +260,9 @@ $('ovB').addEventListener('click',()=>{
   start();
 });
 $('pause').addEventListener('click',togglePause);
+$('entry').addEventListener('submit',sendScore);
+$('reload').addEventListener('click',loadRank);
+loadRank();
 $('reset').addEventListener('click',()=>{state='title';newGame();overlay('スタート','マウス・タッチ・← → キーでパドルを動かします','ゲームを始める')});
 state='title';newGame();requestAnimationFrame(t=>{last=t;loop(t)});
 }
